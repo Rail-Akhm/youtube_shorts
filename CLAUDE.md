@@ -185,8 +185,6 @@ python main.py
 - **Parallel workers**: `ThreadPoolExecutor(max_workers=3)` — можно увеличить до 5-10, зависит от лимитов OpenRouter.
 - **ASS субтитры**: FFmpeg drawtext убран, но можно добавить ASS-субтитры через `libass` — поддерживает inline цвета, анимацию, позиционирование.
 - **CUDA whisper**: в config есть `DEVICE = "cpu"`, можно переключить на `"cuda"` при наличии GPU.
-- **Telegram bot**: обёртка для загрузки видео и получения шортсов.
-- **Streamlit UI**: веб-интерфейс для визуального просмотра хайлайтов и настройки порогов.
 
 ---
 
