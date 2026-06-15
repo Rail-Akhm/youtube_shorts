@@ -14,6 +14,7 @@ Pipeline:
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import shutil
@@ -75,9 +76,16 @@ import config as cfg  # noqa: E402
 class ShortsCreator:
     """
     Оркестратор полного пайплайна создания шортсов.
+
+    Args:
+        mode: режим использования OpenRouter
+            "auto"  — авто: если есть ключ → API, нет → локально
+            "api"   — принудительно через API (ошибка если нет ключа)
+            "local" — только локальный анализ, без API
     """
 
-    def __init__(self):
+    def __init__(self, mode: str = "auto"):
+        self.mode = mode
         self.base_dir = Path(__file__).parent
         self.films_dir = self.base_dir / "films"
         self.shorts_dir = self.base_dir / "shorts"
@@ -156,27 +164,24 @@ class ShortsCreator:
             else:
                 logger.warning("   ⚠️ Анализ аудио не дал результатов")
 
-            # ── Шаг 4: Гибридный анализ экшна (motion + OpenRouter) ──
+            # ── Шаг 4: Анализ экшна ──────────────────────────────
             logger.info("")
-            logger.info("🤖 Шаг 4/6: Анализ экшна через OpenRouter (ключевые кадры)...")
+            use_api = self.mode == "api" or (
+                self.mode == "auto" and cfg.OPENROUTER_API_KEY.startswith("sk-or-v1-")
+            )
 
-            # ActionAnalyzer комбинирует:
-            #   - motion score для ВСЕХ кадров (быстро, локально)
-            #   - OpenRouter Vision для scene_change кадров (точно, но дорого)
-            # Если API ключ не задан — использует только motion score
-            has_api = cfg.OPENROUTER_API_KEY.startswith("sk-or-v1-")
-            if has_api:
-                logger.info(
-                    "   Отправляем %d scene_change кадров в OpenRouter",
-                    sum(1 for _, _, t in frames if t == "scene_change"),
-                )
+            if use_api:
+                logger.info("☁️  Шаг 4/6: Анализ экшна (motion + OpenRouter Vision)...")
+                scene_count = sum(1 for _, _, t in frames if t == "scene_change")
+                logger.info("   Отправляем %d scene_change кадров в OpenRouter", scene_count)
+
+                video_action = self.action_analyzer.analyze(frames, motion_scores)
+
+                if not video_action:
+                    logger.warning("   ⚠️ OpenRouter не вернул результатов — fallback на motion")
+                    video_action = [(ts, s * 10.0) for ts, s in motion_scores]
             else:
-                logger.info("   OpenRouter не настроен — только motion score")
-
-            video_action = self.action_analyzer.analyze(frames, motion_scores)
-
-            if not video_action:
-                logger.warning("   ⚠️ ActionAnalyzer не вернул результатов — fallback на motion")
+                logger.info("💻 Шаг 4/6: Анализ экшна (только motion, локально)...")
                 video_action = [(ts, s * 10.0) for ts, s in motion_scores]
 
             avg_action = sum(s for _, s in video_action) / max(len(video_action), 1)
@@ -293,18 +298,35 @@ class ShortsCreator:
         logger.info("")
         logger.info("╔════════════════════════════════════════════════════╗")
         logger.info("║   🎬 YouTube Shorts Auto-Creator v2.0             ║")
-        logger.info("║   OpenRouter Vision + Motion + Audio + Субтитры   ║")
+        mode_label = {"auto": "🤖 Auto", "api": "☁️  API", "local": "💻 Local"}
+        logger.info("║   %s  •  Motion + Audio + Субтитры      ║", mode_label.get(self.mode, "Auto"))
         logger.info("╚════════════════════════════════════════════════════╝")
         logger.info("")
 
-        # Проверка API ключа
-        if not cfg.OPENROUTER_API_KEY.startswith("sk-or-v1-"):
+        # Проверка API ключа в зависимости от режима
+        has_api_key = cfg.OPENROUTER_API_KEY.startswith("sk-or-v1-")
+
+        if self.mode == "api" and not has_api_key:
+            logger.error(
+                "❌ Режим --mode=api, но OpenRouter API ключ не настроен!\n"
+                "   Укажите ключ в config.py, .env или переменной OPENROUTER_API_KEY"
+            )
+            sys.exit(1)
+
+        if self.mode == "local":
+            logger.info("💻 Режим: только локальный анализ (OpenRouter отключён)")
+            logger.info("")
+
+        elif not has_api_key:
             logger.warning(
                 "⚠️ OpenRouter API ключ не настроен! "
                 "Будет использован только локальный анализ движения."
             )
             logger.warning("   Получите ключ на https://openrouter.ai/keys")
-            logger.warning("   И укажите в config.py или переменной OPENROUTER_API_KEY")
+            logger.warning("   И укажите в config.py, .env или OPENROUTER_API_KEY")
+            logger.info("")
+        else:
+            logger.info("☁️  OpenRouter Vision подключён — анализ ключевых кадров")
             logger.info("")
 
         # Поиск видео
@@ -334,5 +356,23 @@ class ShortsCreator:
 # Entry point
 # ═══════════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    creator = ShortsCreator()
+    parser = argparse.ArgumentParser(
+        description="🎬 YouTube Shorts Auto-Creator — нарезка вертикальных видео",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Примеры:\n"
+            "  python main.py              # авторежим (есть ключ → API, нет → локально)\n"
+            "  python main.py --mode api   # принудительно через OpenRouter\n"
+            "  python main.py --mode local # только локальный анализ (без API)\n"
+        ),
+    )
+    parser.add_argument(
+        "--mode", "-m",
+        choices=["auto", "api", "local"],
+        default="auto",
+        help="Режим анализа: auto (по умолчанию), api, local",
+    )
+    args = parser.parse_args()
+
+    creator = ShortsCreator(mode=args.mode)
     creator.run()
