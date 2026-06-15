@@ -144,39 +144,45 @@ class ActionAnalyzer:
             logger.error("Файл кадра не найден: %s", image_path)
             return None
 
+        # Явно кодируем JSON в UTF-8 (requests иногда ломается на base64)
+        import json as _json
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Оцени уровень экшна на этом кадре от 0 до 10.\n"
+                                "0 — тихий диалог, спокойный пейзаж, статичная сцена\n"
+                                "10 — взрывы, драки, погоня, быстрые движения, крики, спецэффекты\n"
+                                "Ответь ТОЛЬКО одним числом от 0 до 10."
+                            ),
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": f"data:image/jpeg;base64,{b64}",
+                        },
+                    ],
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 10,
+        }
+        body = _json.dumps(payload, ensure_ascii=True).encode("utf-8")
+        req_headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+
         for attempt in range(retries):
             try:
                 resp = requests.post(
                     url="https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": self.model,
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "text",
-                                        "text": (
-                                            "Оцени уровень экшна на этом кадре от 0 до 10.\n"
-                                            "0 — тихий диалог, спокойный пейзаж, статичная сцена\n"
-                                            "10 — взрывы, драки, погоня, быстрые движения, крики, спецэффекты\n"
-                                            "Ответь ТОЛЬКО одним числом от 0 до 10."
-                                        ),
-                                    },
-                                    {
-                                        "type": "image_url",
-                                        "image_url": f"data:image/jpeg;base64,{b64}",
-                                    },
-                                ],
-                            }
-                        ],
-                        "temperature": 0.1,
-                        "max_tokens": 10,
-                    },
+                    headers=req_headers,
+                    data=body,
                     timeout=30,
                 )
 

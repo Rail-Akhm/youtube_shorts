@@ -149,8 +149,14 @@ pip install -r requirements.txt
 cp .env.example .env
 # Отредактируйте .env — вставьте ключ
 
-# Или через переменную окружения:
+# Или через переменную окружения (Linux/macOS):
 export OPENROUTER_API_KEY="sk-or-v1-ваш_ключ"
+
+# Или через переменную окружения (Windows PowerShell):
+$env:OPENROUTER_API_KEY = "sk-or-v1-ваш_ключ"
+
+# Навсегда (Windows):
+[Environment]::SetEnvironmentVariable("OPENROUTER_API_KEY", "sk-or-v1-ваш_ключ", "User")
 ```
 
 Ключ получить: https://openrouter.ai/keys

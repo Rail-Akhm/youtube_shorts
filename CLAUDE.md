@@ -25,6 +25,7 @@ shorts_creator/
 │   ├── video_cutter.py        # Нарезка и вертикализация
 │   └── subtitler.py           # Современные цветные субтитры (ffmpeg drawtext/ass)
 │
+├── CLAUDE.md
 └── README.md
 ```
 
@@ -44,11 +45,11 @@ shorts_creator/
 - Чёрный полупрозрачный фон под текст
 - Крупный шрифт на весь экран
 - Анимация появления (опционально)
-- Реализация через ffmpeg drawtext (быстрее moviepy)
-- Резерв: ASS субтитры для сложных эффектов
+- Реализация через moviepy (кросс-платформенно)
+- Резерв: ffmpeg drawtext для простых случаев
 
 ### 3. Анализ аудио + видео
-- Извлечение аудио-волны через FFmpeg
+- Извлечение аудио-волны через FFmpeg (PCM s16le)
 - Анализ RMS громкости и обнаружение пиков
 - Комбинированная оценка: `score = video_score * 0.6 + audio_score * 0.4`
 - Хайлайты = моменты, где и видео, и аудио показывают высокую активность
@@ -58,23 +59,14 @@ shorts_creator/
 - MAX_CLIP_DURATION = 59 сек (лимит YouTube Shorts)
 
 ### 5. Запуск — только локальный
-- Кинул видео в `input/`, запустил `main.py`, получил результат в `output/`
+- Кинул видео в `films/`, запустил `main.py`, получил результат в `shorts/`
 
 ---
 
-## 📄 Требования к улучшению кода
+## 📄 Файлы проекта
 
-### Общие принципы
-- **Type hints** — все функции аннотированы
-- **Логгер** — вместо print, с уровнями (INFO, WARNING, ERROR)
-- **Обработка ошибок** — везде, включая ffmpeg subprocess
-- **Прогресс-бары** — tqdm везде, где есть циклы
-- **DRY** — без дублирования кода
-
-### Файлы проекта
-
-#### **config.py**
-- OPENROUTER_API_KEY — из переменной окружения
+### **config.py**
+- OPENROUTER_API_KEY — из переменной окружения (или .env)
 - ACTION_THRESHOLD = 7 (0-10, порог для OpenRouter)
 - AUDIO_THRESHOLD = 0.5 (нормализованный, 0-1)
 - MIN_CLIP_DURATION = 15
@@ -84,46 +76,55 @@ shorts_creator/
 - WHISPER_MODEL = "base"
 - KEYFRAME_INTERVAL = 3 (сек, как часто брать кадры)
 - SCENE_CHANGE_THRESHOLD = 30.0 (для детектора смены сцен)
+- VIDEO_WEIGHT = 0.6 / AUDIO_WEIGHT = 0.4 (веса комбинированной оценки)
 
-#### **modules/frame_extractor.py**
-- Scene detection через histogram difference
+### **modules/frame_extractor.py**
+- Scene detection через histogram difference (HSV hue)
 - Извлечение ключевых кадров: каждый N-ый кадр + при смене сцены
-- Сохранение метаданных (тип кадра: обычный / смена сцены)
+- Сохранение метаданных (тип кадра: regular / scene_change)
 
-#### **modules/motion_analyzer.py** (НОВЫЙ)
+### **modules/motion_analyzer.py**
 - Локальный анализ движения через optical flow (Farneback)
 - Анализ разницы между последовательными кадрами
 - Оценка motion score (0.0 - 1.0) для каждого ключевого кадра
 
-#### **modules/audio_analyzer.py** (НОВЫЙ)
-- Извлечение аудио-волны через ffmpeg (pcm)
-- RMS громкость по окнам
+### **modules/audio_analyzer.py**
+- Извлечение аудио-волны через ffmpeg (PCM s16le, 16kHz, моно)
+- RMS громкость по окнам (дефолт 1 сек)
 - Нормализация и поиск пиков
 - Оценка audio score (0.0 - 1.0) для каждого временного отрезка
 
-#### **modules/action_analyzer.py**
-- Улучшен: принимает только ключевые кадры
-- Параллельные запросы к OpenRouter (ThreadPoolExecutor)
-- Retry с exponential backoff
+### **modules/action_analyzer.py**
+- Гибрид: motion score для ВСЕХ кадров + OpenRouter для scene_change
+- Параллельные запросы к OpenRouter (ThreadPoolExecutor, до 3 воркеров)
+- Retry с exponential backoff (2 попытки)
 - Прокси-оценки: если API недоступен — использует motion score
+- **Фикс кодировки**: JSON payload кодируется в UTF-8 вручную (чинит latin-1 ошибку)
 
-#### **modules/highlighter.py**
+### **modules/highlighter.py**
 - Комбинированный анализ: `total = video_action * 0.6 + audio_loudness * 0.4`
-- Динамический порог (не жёсткий 7, а адаптивный под конкретное видео)
+- Динамический порог (75-й перцентиль + ACTION_THRESHOLD как минимум)
 - Умное расширение границ хайлайта (не рвать на середине слова/фразы)
 
-#### **modules/video_cutter.py**
+### **modules/video_cutter.py**
 - Проверка ошибок ffmpeg (check=True, анализ stderr)
 - cropdetect для автоматического определения чёрных полос (pillarbox)
 - Улучшенная вертикализация с учётом содержимого
 
-#### **modules/subtitler.py**
-- Цветные субтитры (kebab-style) через ffmpeg drawtext
+### **modules/subtitler.py**
+- Цветные субтитры (kebab-style) через moviepy (кросс-платформенно)
 - Несколько цветов: жёлтый `#FFD700`, оранжевый `#FF6B35`, красный `#FF3366`, голубой `#00D4FF`
-- Чёрный полупрозрачный фон под текст
-- Разбивка длинных строк на 2-3 строки
+- Чёрный полупрозрачный фон под текст (bg_color="black")
+- Разбивка длинных строк на 2-4 слова
 - Синхронизация с аудио (word-level timestamps из faster-whisper)
-- Резерв: moviepy только если ffmpeg drawtext не справляется
+- Резерв: ffmpeg drawtext для коротких видео (<200 слов)
+
+### **main.py**
+- 6-шаговый pipeline: кадры → motion → аудио → OpenRouter → хайлайты → субтитры
+- Логгер с уровнями (вместо print)
+- Прогресс-бары (tqdm)
+- Обработка ошибок на каждом шаге
+- Авто-создание папок films/, shorts/, temp/
 
 ---
 
@@ -133,18 +134,32 @@ shorts_creator/
 # 1. Установить зависимости
 pip install -r requirements.txt
 
-# 2. Положить большой фильм в папку films/
+# 2. Убедиться что FFmpeg установлен
+ffmpeg -version
+
+# 3. Положить большой фильм в папку films/
 cp /путь/к/фильму.mp4 films/
 
-# 3. Настроить API ключ OpenRouter (опционально, без него работает локально)
-#    Отредактировать config.py или:
+# 4. Настроить API ключ OpenRouter (опционально, без него работает локально)
 $env:OPENROUTER_API_KEY = "sk-or-v1-ваш_ключ"
+# Или навсегда:
+[Environment]::SetEnvironmentVariable("OPENROUTER_API_KEY", "sk-or-v1-ваш_ключ", "User")
 
-# 4. Запустить
+# 5. Запустить
 python main.py
 
-# 5. Готовые шортсы — в папке shorts/
+# 6. Готовые шортсы — в папке shorts/
 ```
+
+---
+
+## 🧪 Известные проблемы
+
+| Проблема | Причина | Решение |
+|----------|---------|---------|
+| `[WinError 2]` на шаге 3 | FFmpeg не в PATH | Установить FFmpeg: `winget install FFmpeg` |
+| `latin-1 codec` в OpenRouter | Requests кодирует JSON как latin-1 | Исправлено: явный UTF-8 payload |
+| tqdm кракозябры в логе | Кодировка cp1251 в Windows | Только в сохранённом выводе, в терминале OK |
 
 ---
 
