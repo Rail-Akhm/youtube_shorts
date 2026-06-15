@@ -1,0 +1,34 @@
+# ─── API ключи ───
+.env
+
+# ─── Сгенерированные файлы ───
+temp/
+films/
+shorts/
+
+# ─── Python ───
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+
+# ─── IDE ───
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ─── OS ───
+Thumbs.db
+.DS_Store
+
+# ─── HuggingFace cache ───
+.cache/
+
+# ─── Claude Code ───
+.claude/
