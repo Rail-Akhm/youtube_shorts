@@ -153,13 +153,40 @@ python main.py
 
 ---
 
-## 🧪 Известные проблемы
+## 🐛 Известные проблемы и архитектурные заметки
 
-| Проблема | Причина | Решение |
-|----------|---------|---------|
-| `[WinError 2]` на шаге 3 | FFmpeg не в PATH | Установить FFmpeg: `winget install FFmpeg` |
-| `latin-1 codec` в OpenRouter | Requests кодирует JSON как latin-1 | Исправлено: явный UTF-8 payload |
-| tqdm кракозябры в логе | Кодировка cp1251 в Windows | Только в сохранённом выводе, в терминале OK |
+### Решённые (зафиксированы в коде)
+
+| Проблема | Где | Причина | Решение |
+|----------|-----|---------|---------|
+| `latin-1 codec` в OpenRouter | `action_analyzer.py:148` | `requests` кодирует `json=` параметр как latin-1, ломается на base64 | Явный `json.dumps(ensure_ascii=True).encode("utf-8")` + `data=` параметр |
+| `cannot unpack non-iterable SubtitleWord` | `subtitler.py` | Старый `add_subtitles_to_video()` (ожидал кортежи) переопределял новый (ожидал SubtitleWord) | Удалён старый метод |
+| `'TextClip' has no attribute 'set_start'` | `subtitler.py` | Moviepy v2 переименовал `set_*` → `with_*` | `.set_start()` → `.with_start()`, `.set_duration()` → `.with_duration()`, `.set_position()` → `.with_position()` |
+| `No module named 'moviepy.editor'` | импорт | Moviepy v2 изменил пути импорта | `from moviepy.editor import` → `from moviepy import` |
+| FFmpeg drawtext на Windows | `subtitler.py` | FFmpeg не находит шрифты по имени, нужен полный путь `.ttf` | Удалён ffmpeg drawtext полностью, всё через moviepy |
+
+### Открытые
+
+| Проблема | Где | Причина | Влияние |
+|----------|-----|---------|---------|
+| `[WinError 2]` ffmpeg не найден | `audio_analyzer.py`, `video_cutter.py` | FFmpeg не добавлен в `%PATH%` | Падает шаг 3 (аудио) и шаг 5 (нарезка) |
+| tqdm кракозябры в логах | Все модули | Tqdm пишет напрямую в stderr, кодировка cp1251 в Windows | Только в сохранённом выводе, в терминале OK |
+| Медленный optical flow | `motion_analyzer.py` | Farneback на CPU, 451 кадр = ~3.5 мин | Ускорить через pyr_scale или resize |
+| Whisper долго грузится | `subtitler.py` | Скачивает модель ~150МБ с HuggingFace при первом запуске | Только первый раз, потом кэш |
+| Нет прогресс-бара для whisper | `subtitler.py` | WhisperModel.transcribe() блокирующий, tqdm не подключён | Долго ждать без индикации |
+| moviepy медленный на длинных видео | `subtitler.py` | Рендерит каждый кадр через PIL | Для >200 слов может быть >5 мин |
+| Нет обработки ошибок ffmpeg timeout | `audio_analyzer.py` | timeout=300 на _extract_raw_audio | Может висеть 5 мин |
+| OpenRouter утечка ключа в логах | `action_analyzer.py` | Логи ошибок HTTP могут содержать заголовки с ключом | Не критично, но лучше скрыть |
+| `films/` и `shorts/` в .gitignore | — | Папки создаются с .gitkeep, но в git не попадают | При клоне нужно создать вручную (или README) |
+
+### Что можно улучшить (v2.1)
+
+- **OpenRouter Vision**: сейчас используется `google/gemini-2.0-flash-exp` — самая дешёвая модель. Можно переключить на `anthropic/claude-3.5-sonnet` или `openai/gpt-4o` для точности.
+- **Parallel workers**: `ThreadPoolExecutor(max_workers=3)` — можно увеличить до 5-10, зависит от лимитов OpenRouter.
+- **ASS субтитры**: FFmpeg drawtext убран, но можно добавить ASS-субтитры через `libass` — поддерживает inline цвета, анимацию, позиционирование.
+- **CUDA whisper**: в config есть `DEVICE = "cpu"`, можно переключить на `"cuda"` при наличии GPU.
+- **Telegram bot**: обёртка для загрузки видео и получения шортсов.
+- **Streamlit UI**: веб-интерфейс для визуального просмотра хайлайтов и настройки порогов.
 
 ---
 

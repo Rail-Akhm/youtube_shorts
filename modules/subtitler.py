@@ -4,24 +4,15 @@
 Генерация:
 1. faster-whisper → word-level таймстемпы
 2. Группировка слов во фразы (по паузам и длине)
-3. Каждая фраза — цветной текст на чёрном полупрозрачном фоне
-4. Цвета циклически меняются между словами для визуального разнообразия
+3. Каждая фраза — цветной текст на чёрном фоне
+4. Цвета циклически меняются между словами
 
-Реализация:
-- ffmpeg drawtext — основной рендер (быстрый)
-- moviepy — fallback (если фильтр слишком сложный)
+Реализация: moviepy v2 (кросс-платформенно)
 """
 
 from __future__ import annotations
 
-import enum
 import logging
-import math
-import os
-import re
-import subprocess
-import tempfile
-from pathlib import Path
 from typing import List, Tuple
 
 from faster_whisper import WhisperModel
@@ -46,9 +37,7 @@ class SubtitleWord:
 
 
 class Subtitler:
-    """
-    Генератор цветных субтитров.
-    """
+    """Генератор цветных субтитров (moviepy v2)."""
 
     def __init__(self):
         self.model = WhisperModel(WHISPER_MODEL, device=DEVICE, compute_type="int8")
@@ -64,7 +53,7 @@ class Subtitler:
         Returns:
             список SubtitleWord
         """
-        max_line_width = 50  # макс символов в строке
+        max_line_width = 50
 
         segments, info = self.model.transcribe(
             audio_path,
@@ -80,7 +69,6 @@ class Subtitler:
 
         for segment in segments:
             if not segment.words:
-                # Нет word-level — создаём из текста сегмента
                 words.append(SubtitleWord(
                     text=segment.text.strip(),
                     start=segment.start,
@@ -95,14 +83,9 @@ class Subtitler:
                 if not word_text:
                     continue
 
-                # Определяем цвет для слова (меняем при знаках препинания или
-                # каждые 2-3 слова для разнообразия)
-                needs_newline = False
                 if line_len + len(word_text) > max_line_width:
-                    needs_newline = True
                     line_len = 0
 
-                # Добавляем цвет к слову
                 color = COLOR_CYCLE[color_idx % len(COLOR_CYCLE)]
                 words.append(SubtitleWord(
                     text=word_text,
@@ -113,7 +96,6 @@ class Subtitler:
 
                 line_len += len(word_text) + 1
 
-                # Меняем цвет каждые 2-3 слова
                 if len(words) % 3 == 0:
                     color_idx += 1
 
@@ -135,10 +117,7 @@ class Subtitler:
         output_path: str,
     ) -> str:
         """
-        Накладывает цветные субтитры на видео.
-
-        Пытается использовать ffmpeg drawtext. Если фильтр слишком сложный
-        (много слов), падает на moviepy.
+        Накладывает цветные субтитры на видео (moviepy v2).
 
         Args:
             video_path: исходное видео (уже вертикальное 9:16)
@@ -148,108 +127,7 @@ class Subtitler:
         Returns:
             output_path
         """
-        # Если слов мало — пробуем ffmpeg
-        if len(words) < 200:
-            try:
-                return self._render_with_ffmpeg(video_path, words, output_path)
-            except Exception as exc:
-                logger.warning("FFmpeg субтитры не удались (%s), падаем на moviepy", exc)
-
-        # Fallback на moviepy
         return self._render_with_moviepy(video_path, words, output_path)
-
-    # ------------------------------------------------------------------
-    def _render_with_ffmpeg(
-        self,
-        video_path: str,
-        words: List[SubtitleWord],
-        output_path: str,
-    ) -> str:
-        """
-        Рендерит субтитры через ffmpeg drawtext.
-        Каждое слово — отдельный drawtext фильтр с цветным текстом
-        и чёрным фоном.
-        """
-        # Группируем слова в строки для отображения
-        lines = self._group_words_into_lines(words)
-
-        # Строим drawtext фильтры
-        drawtext_filters = []
-        video = VideoFileClip(video_path)
-        video_w, video_h = video.w, video.h
-        video.close()
-
-        font_size = SUBTITLE_FONT_SIZE
-        line_height = font_size + 20
-        margin_bottom = 80  # отступ от низа
-        margin_horizontal = 40
-
-        for line_idx, (line_start, line_end, line_words) in enumerate(lines):
-            # Позиция строки (снизу вверх)
-            y_pos = video_h - margin_bottom - line_idx * line_height
-
-            # Строим текст для строки — каждая часть со своим цветом
-            # Используем \fs для размера и \c для цвета в ASS-стиле
-            # На самом деле drawtext не поддерживает inline цвета в одном фильтре.
-            # Поэтому каждое слово — отдельный drawtext фильтр.
-
-            x_offset = margin_horizontal
-            for word in line_words:
-                # Измеряем ширину текста (приблизительно)
-                text_width = len(word.text) * font_size * 0.6
-                bg_padding = 10
-
-                # drawtext фильтр для этого слова
-                # Цвет текста + чёрный фон
-                color = word.color.lstrip("#")
-                filter_str = (
-                    f"drawtext=text='{self._escape_ffmpeg_text(word.text)}':"
-                    f"fontsize={font_size}:"
-                    f"fontcolor={color}:"
-                    f"box=1:boxcolor=black@0.6:"
-                    f"boxborderw={bg_padding}:"
-                    f"x={x_offset}:"
-                    f"y={y_pos}:"
-                    f"enable='between(t,{word.start:.2f},{word.end:.2f})'"
-                )
-                drawtext_filters.append(filter_str)
-                x_offset += text_width + bg_padding * 2 + 8
-
-        if not drawtext_filters:
-            # Нет слов — копируем без изменений
-            logger.warning("Нет слов для субтитров")
-            cmd = [
-                "ffmpeg", "-i", video_path,
-                "-c", "copy",
-                "-y", output_path,
-            ]
-            subprocess.run(cmd, check=True, capture_output=True)
-            return output_path
-
-        # Комбинируем все фильтры через запятую
-        filter_complex = ",".join(drawtext_filters)
-
-        cmd = [
-            "ffmpeg", "-i", video_path,
-            "-vf", filter_complex,
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-            "-c:a", "aac", "-b:a", "128k",
-            "-y", output_path,
-        ]
-
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=600,
-            )
-            if result.returncode != 0:
-                stderr = result.stderr[:1000] if result.stderr else ""
-                raise RuntimeError(f"FFmpeg error: {stderr}")
-
-            logger.info("Субтитры наложены через ffmpeg (%d фильтров)", len(drawtext_filters))
-            return output_path
-
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("FFmpeg таймаут при наложении субтитров")
 
     # ------------------------------------------------------------------
     def _render_with_moviepy(
@@ -258,9 +136,7 @@ class Subtitler:
         words: List[SubtitleWord],
         output_path: str,
     ) -> str:
-        """
-        Рендерит субтитры через moviepy (более гибкий, но медленнее).
-        """
+        """Рендерит субтитры через moviepy v2."""
         logger.info("Рендеринг субтитров через moviepy (%d слов)", len(words))
         video = VideoFileClip(video_path)
 
@@ -272,8 +148,7 @@ class Subtitler:
         margin_bottom = 80
         margin_horizontal = 40
 
-        for line_idx, (line_start, line_end, line_words) in enumerate(lines):
-            # Каждое слово отдельным TextClip, выложенным в строку
+        for line_idx, (_line_start, _line_end, line_words) in enumerate(lines):
             x_offset = margin_horizontal
             y_pos = video.h - margin_bottom - line_idx * line_height
 
@@ -287,13 +162,14 @@ class Subtitler:
                     stroke_color="black",
                     stroke_width=2,
                     method="label",
-                ).set_start(word.start).set_duration(
-                    max(0.05, word.end - word.start)
-                ).set_position((x_offset, y_pos))
+                )
+                # moviepy v2: with_* вместо set_*
+                txt = txt.with_start(word.start)
+                txt = txt.with_duration(max(0.05, word.end - word.start))
+                txt = txt.with_position((x_offset, y_pos))
 
                 text_clips.append(txt)
 
-                # Обновляем x_offset (приблизительная ширина)
                 text_width = len(word.text) * font_size * 0.6
                 x_offset += text_width + 20
 
@@ -333,7 +209,7 @@ class Subtitler:
         lines: List[Tuple[float, float, List[SubtitleWord]]] = []
         current_line: List[SubtitleWord] = []
         max_words_per_line = 4
-        pause_threshold = 0.5  # сек — пауза длиннее → новая строка
+        pause_threshold = 0.5
 
         for word in words:
             if not current_line:
@@ -342,7 +218,6 @@ class Subtitler:
                 pause = word.start - current_line[-1].end
                 last_word = current_line[-1]
 
-                # Начинаем новую строку если:
                 if (
                     len(current_line) >= max_words_per_line
                     or pause > pause_threshold
@@ -361,23 +236,3 @@ class Subtitler:
             lines.append((line_start, line_end, current_line))
 
         return lines
-
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _escape_ffmpeg_text(text: str) -> str:
-        """Экранирует спецсимволы для drawtext."""
-        replacements = {
-            "'": "’",
-            ":": "\\:",
-            "\\": "\\\\",
-            "[": "\\[",
-            "]": "\\]",
-            "{": "\\{",
-            "}": "\\}",
-            "%": "\\%",
-        }
-        for old, new in replacements.items():
-            text = text.replace(old, new)
-        return text
-
-    
